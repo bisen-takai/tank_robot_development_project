@@ -1,0 +1,17 @@
+# Project Overview
+
+このフォルダでは、Tank Robot Development Project の全体概要、製品目的、製品目標を管理します。
+
+ここに置く文書は、システム要求仕様を作成するための上位文書として扱います。
+
+## Documents
+
+| File | Description |
+| --- | --- |
+| `product_purpose_and_goals.md` | 製品目的・製品目標を定義する文書 |
+
+## Notes
+
+- 本フォルダの文書は、要求仕様を作成・見直しする際の前提資料とします。
+- 要求仕様そのものは `docs/10_requirements/` に格納します。
+- 設計資料は `docs/20_design/` に格納します。
