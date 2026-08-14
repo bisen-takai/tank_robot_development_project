@@ -8,7 +8,7 @@
 
 | File | Description |
 | --- | --- |
-| `product_purpose_and_goals.md` | 製品目的・製品目標を定義する文書 |
+| `01_製品目的・製品目標.md` | 製品目的・製品目標を定義する文書 |
 
 ## Notes
 
