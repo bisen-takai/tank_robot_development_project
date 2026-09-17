@@ -50,7 +50,7 @@ BLE接続状態、Wi-Fi接続状態、認証状態、アクチュエータ状態
 本書は、次の文書を上位文書および共通設計文書として作成する。
 - [`docs/00_project_overview/01_製品目的・製品目標.md`](../../../00_project_overview/01_製品目的・製品目標.md)
 - [`docs/10_requirements/02. システム状態管理.md`](../../../10_requirements/02.%20システム状態管理.md)
-- [`docs/20_basic_design/00_Tank_Robot 基本設計について.md`](../../../20_basic_design/00_Tank_Robot 基本設計について.md)
+- [`docs/20_basic_design/00_Tank_Robot 基本設計について.md`](../../../20_basic_design/00_Tank_Robot%20基本設計について.md)
 - [`docs/20_basic_design/01_システム構成/Tank_Robotシステム構成.md`](../../../20_basic_design/01_システム構成/Tank_Robotシステム構成.md)
 - [`docs/20_basic_design/02_システムアーキテクチャ/Tank_Robotシステムアーキテクチャ.md`](../../../20_basic_design/02_システムアーキテクチャ/Tank_Robotシステムアーキテクチャ.md)
 #### 1.3.2 関連するシステム要求仕様
