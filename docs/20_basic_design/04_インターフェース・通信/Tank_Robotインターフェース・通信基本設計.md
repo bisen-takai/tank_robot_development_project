@@ -1045,8 +1045,8 @@ currentな停止・緊急停止状態は、stop transactionのRESULTとは別に
 
 E-STOPは通常operationより優先する。
 
-- body E-STOPは05_電源・ハードウェアのindependent hardware pathで走行出力禁止を開始する。
-- software ISR/event/停止・緊急停止管理の処理はhardware停止を待たせず、状態・result・後続安全処理を管理する。
+- body E-STOPは05_電源・ハードウェアのindependent hardware pathで走行出力禁止とservo PWM output inhibitを開始する。
+- software ISR/event/停止・緊急停止管理の処理はhardware停止を待たせず、走行／砲塔砲身の状態失効、result、再開禁止および後続安全処理を管理する。
 - BLE E-STOP messageはBLE接続・認証→停止・緊急停止管理へ通常status/log/VPSより高優先で渡す。
 
 ---
@@ -1286,8 +1286,9 @@ TIME_TRUSTED喪失時はVPS接続・デバイス認証 existing VPS sessionを�
 
 - PWM requestとmechanical actual positionを区別する。
 - PWM停止resultはcontrol-side evidenceでありmechanical rest measurementではない。
-- `SERVO_PWM_OE`、`PWR_SERVO`、砲塔・砲身制御 output stateを相関する。
-- PWM再開条件は砲塔・砲身制御が管理するARM／現在状態に従う。
+- `SERVO_PWM_OE`、E-STOP hardware loop、`PWR_SERVO`、砲塔・砲身制御 output stateを相関する。
+- Body E-STOP contact Aは`SERVO_PWM_OE`をsoftware非依存で禁止側へ作用させる。effective OE状態または同等read-backを制御側停止確認へ使用する。
+- physical E-STOP releaseだけでPWMを再開せず、砲塔・砲身制御が管理する緊急停止解除後の`MANUAL_DATUM_ARM`／現在状態／新しいsoftware enable条件に従う。
 
 ### 18.3 監視入力
 

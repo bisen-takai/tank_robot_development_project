@@ -149,7 +149,7 @@ Boot Handoffのschema・各項目の意味およびIWDT ownership／移管契約
 | Deadline | 処理開始または完了に対して満たすべき期限 |
 | Checkpoint | 監視対象Processについて、定められた処理区間の正常完了を示す情報。各監視区間の完了条件は第14.3.1節に従う |
 | Execution Generation | Processまたは監視区間の新しい正常進行を識別する世代 |
-| 実行scan | 同一優先度・同一期限Processへ固定順に実行機会を与える論理選択区間 |
+| fairness pass | 同一Priority Class内で各Processへ原則1回ずつ実行機会を与える論理選択区間 |
 | 機能側で管理する一連の処理 | Config、Product Data、Time、credential等について、データ管理機能が定める条件に基づいて更新を確定し、または復旧する処理 |
 | 記憶媒体への保存 | MRAM/Serial NOR上のcopy、commit marker、CRC等を永続データ管理/Persistenceが実現する保存処理 |
 
@@ -417,30 +417,43 @@ READYは実行契機でありdata本体ではない。dataはFlag、Counter、Sl
 | --- | --- | --- |
 | P0 | Safety Immediate | E-STOP後続、Safety Stop、危険電気事象、即時出力禁止に直結する処理 |
 | P1 | Real-time Control / Monitor | BatterySafety、SystemMonitor、Drive、Turret、期限付きSafety表示更新等 |
-| P2 | System / Service | SystemState、Startup、Power通常処理、BLE、Owner、Wi-Fi、VPS、Config、Security通常request、OTA、Persist、Time等 |
-| P3 | Background | 通常Log整理、通常Display、diagnostic background等 |
+| P2 | System / Service | SystemState、Startup、Power通常処理、BLE、Owner、Wi-Fi、VPS、Config、Security通常request、OTA、Persist、Time、通常Status等 |
+| P3 | Best-effort Background | 通常Log整理等、期限保証を持たない処理 |
 
 ここでいうPriorityはProcess実行Priorityであり、製品上のSafety priorityそのものではない。
 
-状態表示・利用者通知の通常表示reconciliation/pattern処理はP3を基本とする。一方、power danger/E-STOP等で提供元での情報確定から表示出力更新開始50 ms以内の契約を持つEventは、Display Processの実効PriorityをP1相当へ引き上げて処理できる構成とする。ただし表示更新は実際のE-STOP、停止、電源保護P0処理より優先せず、表示完了をSafety処理の成立条件にしない。
+P3は、P0/P1/P2が継続READYであればstarvationし得ることを前提とする。したがって、期限を持つ処理、starvationによって要求違反となる処理、固定資源保護のために有限時間内の実行が必要な処理はP3へ配置しない。Background workでも期限または固定資源保護が必要になった場合は、担当機能がP2のEvent/Timeout等として実行契機を成立させる。
+
+状態表示・利用者通知の通常表示reconciliation/pattern処理は、50 ms周期・100 ms再照合・通常表示200 ms以内の契約を持つためP2を基本とする。一方、power danger/E-STOP等で提供元での情報確定から表示出力更新開始50 ms以内の契約を持つEventは、Display Processの実効PriorityをP1相当へ引き上げて処理できる構成とする。ただし表示更新は実際のE-STOP、停止、電源保護P0処理より優先せず、表示完了をSafety処理の成立条件にしない。
 
 ### 7.4 READY理由による実効Priority
 
 同一ProcessでもREADY理由により実効Priorityを上げられる。高Priority理由を処理した同じ呼出しで大量の低Priority workを続けない。
 
+`BACKGROUND_WORK`というREADY理由名はP3を意味しない。受理済みTransactionを期限内に進めるための分割work等はP2としてよい。真に期限保証を持たないbest-effort処理だけをP3とする。
+
 ### 7.5 同一Priorityの選択規則
 
 1. 最も高いPriority Class
-2. 同一Priorityでは最も近いDeadline
-3. 同一Deadline/Deadlineなしでは固定tie-break順
+2. そのPriority Classで、現在のfairness passにおいて未実行のProcessを候補とする
+3. 候補内で最も近いDeadline
+4. 同一Deadline/Deadlineなしでは固定tie-break順
 
-Round-Robinは初期基本方式に採用せず、再現性・時間解析性を優先する。
+同一Processが分割workを直ちに再READYしても、同じfairness passで未実行の同Priority Processを差し置いて連続実行しない。
 
-### 7.6 同一Processの連続実行抑制
+Round-Robinを全Priorityへ一律適用する方式は採用せず、再現性・時間解析性を優先する。
 
-1実行scanで同じProcessは原則1回とする。未処理workは後続scanへ残す。Process return後に新しいSafety理由が成立した場合はscan公平性よりSafetyを優先して再選択する。
+### 7.6 READY集約・fairness・Safety再入場
 
----
+同じProcess・同じREADY理由が未処理の間に再度成立した場合、READY bit自体は集約してよいが、data本体はQueue、Slot、Counter、Latch等の管理元へ保持する。既存の早いDeadlineを、後から到着したEvent/Requestで延長しない。
+
+Processが一部だけを処理してreturnし、管理元に未処理dataが残る場合は、次の未処理dataに対応するREADYを再成立させる。
+
+Priority Classごとにfairness passを管理し、同一passでは同じProcessを原則1回とする。全候補Processが実行済みでREADYが残る場合、そのPriority Classだけ新しいpassを開始する。
+
+Process return後に**新しいSafety source occurrence**が成立した場合だけ、同一passの実行済み制限を越えて再選択できる。同一Safety transactionのcontinuationやProcess自身の再postを、新しいSafety occurrenceとして扱わない。
+
+高Priority READYを下位Priorityのために意図的に待たせない。このためP3 starvationは許容するが、P3に期限付き処理または資源保護必須処理を配置しない。P2の継続workについては、Process実行時間上限とclass内fairnessを適用し、最大到着量、P0/P1干渉、ISRおよびScheduler overheadを含むworst-case response timeで期限成立を確認する。
 
 ## 8. 周期・Deadline・実行時間設計
 
@@ -690,6 +703,37 @@ Wi-Fi/VPS実接続等、起動完了条件でない処理をStartup完了待ち�
 
 設定管理、製品情報管理、時刻管理、所有者・操作端末管理などで、永続データに関する一連の更新・復旧処理が未完了で残っている場合は、各データ管理機能が担当する基本設計に従って復旧する。各データに適用するREADY、ACTIVE、TRUSTEDなどの公開条件を満たした後に、利用する機能へデータを提供する。
 
+### 12.4.1 BatterySafetyのADC_B自己校正と製品校正
+
+BatterySafetyの起動時校正は、次の二つを別の責任として扱う。
+
+- **ADC_B hardware self calibration**：RA8M2のADC_B peripheralをscan可能な状態へするMCU固有処理。Platform/FSP境界で実行する。
+- **製品校正**：製品情報管理が管理する校正データをBatterySafetyが適用し、ADC raw値を電圧・電流・温度等の物理量へ変換する処理。
+
+ADC_B hardware self calibrationは、ADC_Bのscan開始前に正常完了していなければならない。reset、ADC設定・clock変更、module-stop解除、Software Standby等からの復帰によって再校正が必要となった場合も、scanを再開する前に完了させる。
+
+起動時は、概ね次の順序とする。
+
+```text
+ADC_B初期化／Scan設定
+  ↓
+ADC_B hardware self calibration
+  ↓
+raw acquisition開始
+  ↓
+Product Data読出し・完全性確認
+  ↓
+製品校正profile適用
+  ↓
+校正済み監視値による電気安全判定
+  ↓
+BatterySafety正常Checkpoint／MONITORED
+```
+
+hardware self calibration済みであっても、製品校正profileが未確立のraw値を通常操作許可または正式な電気安全判定の根拠にしない。
+
+ADC_B hardware self calibration失敗と、製品校正データ不正・未取得は別の失敗原因として扱い、どちらの場合もBatterySafetyの正式監視成立前に通常操作を許可しない。
+
 ### 12.5 IWDT更新責任の移管
 
 IWDTの論理的な更新責任、移管状態・ID、および移管処理の意味は、固定ブート・復旧／インターフェース・通信基本設計／電源・省電力管理の各基本設計に従う。本節は、その契約を本体アプリケーションの実行環境で適用する順序と禁止事項を定める。
@@ -734,7 +778,11 @@ actuator安全化、必要保存、再起動理由保持を進め、最終条件
 
 ### 13.1 Scheduler共通化
 
-通常動作とlow-power interval wakeで別Schedulerを作らず、同じScheduler/Process定義を使用しexecutionEnabledとmonitorModeを切り替える。
+通常動作とlow-power interval wakeで別Schedulerを作らず、同じScheduler/Process定義を使用する。
+
+`executionEnabled`はProcessの実行lifecycle自体が成立しているかを表し、Moduleの初期化、停止、復帰等のlifecycle境界で切り替える。`monitorMode`はSystemMonitorが管理する監視契約であり、Schedulerは変更しない。
+
+低消費電力中に通常Processの実行を一時的に抑止する場合は、`executionEnabled`を一律に変更せず、詳細設計で定めるScheduler low-power profileによりProcessごとの実行可能READY理由を制限する。これにより、Process lifecycle、監視契約、低消費電力中の一時的実行制限を別概念として扱う。
 
 ### 13.2 低消費電力移行
 
@@ -771,12 +819,15 @@ PWR_DRIVE/PWR_SERVO等の通電維持縮退では、必要な1 ms current acquis
 
 1. wake reason保持
 2. actuator output prohibited再確認
-3. BatterySafety通常監視へ復帰
-4. reasonに必要な機能だけ復帰
-5. state/config/power整合確認
-6. 必要ProcessをexecutionEnabled
-7. SystemMonitor ARMING
-8. first normal Checkpoint後MONITORED
+3. ADC_B hardware self calibrationを、現在のADC状態・FSP要件に従いscan再開前に実施
+4. hardware self calibration完了後にADC取得を再開
+5. Product Data校正profileの現在世代を確認し、必要に応じ再適用
+6. 校正済み監視値でBatterySafety通常監視へ復帰
+7. reasonに必要な機能だけ復帰
+8. state/config/power整合確認
+9. 必要ProcessをexecutionEnabled
+10. SystemMonitor ARMING
+11. first normal Checkpoint後MONITORED
 
 ### 13.8 休止前情報を再利用しない
 
@@ -859,17 +910,19 @@ Checkpointは、**その論理Processが現在の処理段階で要求される�
 ### 14.5 SystemMonitor周期・stall基本契約
 
 - SystemMonitor周期：**10 ms**
-- BatterySafety／Drive／Turret等の10 ms重要Processが`MONITORED`中で、正常Checkpointの鮮度が**30 ms以上**になった状態：進行停止異常候補
+- BatterySafety／Drive／Turret等の10 ms重要Processについて、最後の正常Checkpointから進行停止異常候補をSystemMonitorが検出し、監視評価へ反映するまでの上限：**30 ms**
 
 10/30 msはWCET、最大負荷、停止時間要求を用いて実機検証する**基本設計で管理し、評価結果を基に確定する値**であり、詳細設計だけで緩和しない。
 
-30 msは通常の処理期限を30 msへ延長する値ではない。10 ms周期のProcessが1周期の期限を超過した事実は、その時点で記録する。30 msは、「Scheduler自体は動いているが正常な進行が継続していない」と判定するための進行停止検出の上限時間である。
+30 msは「Checkpoint ageが30 ms以上になった後、次のSystemMonitor周期で検出すればよい」という内部しきい値ではない。SystemMonitor自身の周期、Schedulerによる開始遅延および評価処理時間を含め、最後の正常Checkpointから30 ms以内に進行停止異常候補を検出・反映できるよう、詳細設計で内部のstale比較時刻を前倒しして配分する。
+
+10 ms周期Processが1周期の期限を超過した事実は、その時点で記録する。30 msは通常の処理期限を30 msへ延長する値ではなく、「Scheduler自体は動いているが正常な進行が継続していない」状態を検出する上限時間である。
 
 監視区分は次のとおりとする。
 
 | monitoring class | freshness／stall契約 |
 | --- | --- |
-| 10 ms periodic critical | 担当機能が定める各周期の期限を守る。`MONITORED`中、Checkpointが30 ms更新されなければ進行停止の候補とする |
+| 10 ms periodic critical | 担当機能が定める各周期の期限を守る。`MONITORED`中、最後の正常Checkpointから30 ms以内に進行停止異常候補を検出・監視評価へ反映する |
 | P0/P2 finite transaction critical | 担当機能が定める現在の段階・処理の期限を使用する。共通の30 msを一律に適用しない |
 | deadline付きservice transaction | 担当機能が定めるタイムアウト・段階の期限を使用する。外部応答を待つ間、結果のないポーリングでCheckpointを更新しない |
 | urgent Display | 状態表示・利用者通知 50 ms開始deadlineを使用。通常Display livenessとは分離 |
@@ -1092,7 +1145,7 @@ DEVELOPMENT/EVALUATIONでは固定Ring BufferでProcess ID、start/end、READY r
 | 18 | 製品情報管理 | Service | 短時間のQueryと、Product Dataの更新・復旧を管理するFSM |
 | 19 | 固定ブート・復旧 | Special pre-Application | Scheduler開始前の処理、Boot Watchdog Serviceの管理 |
 | 20 | 時刻管理 | Service | RTC/UTC Request/Timer + Time Update transaction |
-| 21 | 状態表示・利用者通知 | Application | normal P3 periodic/Event。期限付きSafety表示Eventは実効P1相当 |
+| 21 | 状態表示・利用者通知 | Application | normal P2 periodic/Event。期限付きSafety表示Eventは実効P1相当 |
 
 上表は責任・実行方式であり、`.c/.h`、Class、関数数、最終Process分割数を固定しない。
 
@@ -1126,7 +1179,7 @@ DEVELOPMENT/EVALUATIONでは固定Ring BufferでProcess ID、start/end、READY r
 | Product Data | 更新・復旧の要求・結果 | P2 | 要求／FSM |
 | Fixed Boot/Recovery | リセット・起動段階の進行 | Application Schedulerの対象外 | 本体アプリケーション起動前に実行 |
 | Time | RTC/UTCタイマー、時刻更新の要求・結果 | P2 | 要求・タイマー・FSM |
-| Display normal | PERIODIC_DUE、提供元の情報の変更 | P3 | 表示パターン50 ms周期、情報の再照合100 ms周期 |
+| Display normal | PERIODIC_DUE、提供元の情報の変更 | P2 | 表示パターン50 ms周期、情報の再照合100 ms周期 |
 | Display urgent | 提供元からの緊急の安全イベント | 実効P1相当 | イベント |
 | SystemMonitor runtime | PERIODIC_DUE | P1 | 10 ms周期 |
 
@@ -1314,10 +1367,13 @@ Platform初期化では、固定ブート・復旧／電源・省電力管理／
 
 - 各Process WCET/平均/max
 - P0/P1 READY→start worst latency
+- P2 fairness pass worst-case response timeと、状態表示・利用者通知の50 ms周期／200 ms通常表示上限
+- P3 starvationが許容されたbest-effort処理だけに限定され、固定資源枯渇や要求違反を起こさないこと
 - 1 ms common nonpreemptive blocking boundの成立性
 - Drive/Turret/BatterySafety/SystemMonitor 10 ms jitter/deadline
 - ADC/DMA 1 ms sample欠損
 - SystemMonitor 10 ms / 30 ms 処理の進行停止の判定
+- SystemMonitor自身の周期・READY→start遅延・評価時間を含めても、最後の正常Checkpointから30 ms以内に進行停止異常候補を反映できること
 - 第19.1節の論理Process READY／deadline／split-merge不変条件
 - 第14.2.1節の状態・処理段階ごとの監視対象の切替えとARMING→MONITORED
 - fresh monitor evaluation evidenceを前回feedから再利用しないこと
@@ -1495,7 +1551,7 @@ Priority class、READY意味、選択順および第19.1節の論理実行契約
 | D-06 | Process Blockingを禁止し短時間returnする |
 | D-07 | P0～P3の少数Priority Classを使用する |
 | D-08 | READY理由による実効Priority昇格を許容する |
-| D-09 | 同Priorityはdeadline→fixed tie-breakで選択しRound-Robinを初期採用しない |
+| D-09 | 同Priorityはfairness pass未実行候補→deadline→fixed tie-breakで選択し、全Priority一律Round-Robinを採用しない |
 | D-10 | Process returnごとにREADY/Priorityを再評価する |
 | D-11 | Process連続CPU占有0.5 ms目標、1.0 ms原則上限を基本設計で管理する値とする |
 | D-12 | 非preemptive blocking + ISR + higher-priority backlogでSafety deadlineを評価する |
@@ -1508,7 +1564,7 @@ Priority class、READY意味、選択順および第19.1節の論理実行契約
 | D-19 | Snapshot既定方式をDouble Buffer + Generationとする |
 | D-20 | normally `malloc/free`とunbounded Queueを禁止する |
 | D-21 | Safety用Latch/予約資源をnormal workから分離する |
-| D-22 | normal DisplayはP3、状態表示・利用者通知の50 ms urgent safety indicationはeffective P1相当で処理可能とするがSafety P0を待たせない |
+| D-22 | normal DisplayはP2、状態表示・利用者通知の50 ms urgent safety indicationはeffective P1相当で処理可能とするがSafety P0を待たせない |
 | D-23 | 更新・復旧処理を管理する機能と、記憶媒体への保存を担当する永続データ管理の役割を分離する |
 | D-24 | 固定ブート・復旧/インターフェース・通信基本設計で定めるBoot HandoffをApplication runtimeで検証し、previous reset/IWDT情報を上書き前にcaptureする |
 | D-25 | 固定ブート・復旧/インターフェース・通信基本設計/電源・省電力管理で定めるFIXED_BOOT→POWER_MANAGER IWDT ownership移管契約をApplication runtimeへ適用し、Process/ISR/SystemMonitorからの直接feedを禁止する |
@@ -1520,11 +1576,11 @@ Priority class、READY意味、選択順および第19.1節の論理実行契約
 | D-31 | セキュリティ管理で定めるSecurity 8 slot、1 registration context、256 byte small input、96 byte transientをruntime固定resourceとして適用する |
 | D-32 | long crypto/OTA/Flashはchunk/async化しSafety deadlineを侵害する分割不能処理が残る場合は方式/RTOSを再検討する |
 | D-33 | runtime statsはRAM中心、detail traceはDEVELOPMENT/EVALUATION固定Ringで扱う |
-| D-34 | P0/P1およびdeadlineを持つP2/P3について第19.1節の論理Process READY・Priority・周期／Event・deadline・monitoring classを基本設計で固定する |
+| D-34 | P0/P1およびdeadlineを持つP2について第19.1節の論理Process READY・Priority・周期／Event・deadline・monitoring classを基本設計で固定する |
 | D-35 | Process split/mergeを許容するが、READY・Priority・deadline・budget・Checkpoint・監視不変条件を維持する |
 | D-36 | SystemMonitor監視対象をstate/phase別matrixで固定し、意図的休止とstallを区別する |
 | D-37 | CheckpointはProcess entryではなく論理処理区間の正常完了証拠とし、空poll／部分処理で更新しない |
-| D-38 | 30 msは10 ms重要Processのstall検出boundであり、10 ms正常deadlineを30 msへ緩和しない |
+| D-38 | 30 msは10 ms重要Processについて最後の正常Checkpointから進行停止異常候補を検出・監視評価へ反映するまでのboundであり、内部stale閾値そのものではない。10 ms正常deadlineを30 msへ緩和しない |
 | D-39 | Power Managementは前回feedと異なるfresh monitor evaluation evidenceをIWDT feed根拠として確認し、old正常結果を反復使用しない |
 | D-40 | monitor違反は異常管理へruntime anomalyとして通知し、現在のfeed必須対象がstaleなら電源・省電力管理 feed条件を満たさない。SystemMonitor自身は直接reset/feedしない |
 
@@ -1566,7 +1622,7 @@ GENERAL／OWNER再登録時の認証用証明データ、保護された秘密�
 
 - No-RTOS方式自体を変更する必要はない。
 - 機能別基本設計01～21の各機能を同一Runtimeで実行する責任分界が成立する。
-- P0/P1およびdeadlineを持つP2/P3の論理実行契約が、詳細設計で再選択不要な粒度まで確定している。
+- P0/P1およびdeadlineを持つP2の論理実行契約が、詳細設計で再選択不要な粒度まで確定している。
 - SystemMonitorのstate/phase別監視対象、ARMING条件、チェックポイントが示す内容、処理の進行停止の判定およびIWDT feedへのfreshness連携が確定している。
 - Fixed Boot/Application間のBoot Handoff、Display ownership、IWDT ownershipが曖昧でない。
 - 機能側で管理する一連の処理と記憶媒体への保存の責任を混同していない。

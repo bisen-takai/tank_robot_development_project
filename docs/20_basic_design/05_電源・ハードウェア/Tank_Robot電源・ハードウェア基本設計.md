@@ -708,9 +708,14 @@ servo側PWM lineには`SERVO_PWM_OE`を持つbuffer stageを設け、次の場�
 - MCU reset
 - `PWR_CTRL_GOOD` loss
 - `PWR_SERVO` off
+- E-STOP hardware loop active、open、またはreleaseを確認できない
 - 砲塔・砲身制御からPWM disable要求
 
-buffer OEにはdefault OFF biasを設ける。
+`SERVO_PWM_OE`のhardware enable条件は、少なくとも`PWR_CTRL_GOOD`、`PWR_SERVO`使用可能、`HW_ESTOP_RELEASED`、servo protection非作動、および砲塔・砲身制御のsoftware enable requestの論理積とする。いずれかが不成立、不明、Hi-Zの場合はPWM禁止側とする。
+
+buffer OEにはdefault OFF biasを設ける。Body E-STOP contact AのopenはMCU、Scheduler、IRQ処理を介さず`SERVO_PWM_OE`を禁止側へ作用させる。
+
+制御側停止確認に使用できるよう、`SERVO_PWM_OE`のeffective gate状態または同等のhardware read-backをRA8M2から確認可能とする。単なるsoftware request値だけをeffective OE状態へ読み替えない。
 
 ### 9.4 PWM OFFと機械停止
 
@@ -762,14 +767,16 @@ contact openをE-STOP active側とすることで、button操作だけでなく�
 
 | 経路 | 用途 |
 | --- | --- |
-| E-STOP hardware contact A | `DRIVE_HW_ENABLE`を通常SW/I2Cを介さず強制OFF |
+| E-STOP hardware contact A | `DRIVE_HW_ENABLE`と`SERVO_PWM_OE`を通常softwareを介さず禁止側へhardware gateする |
 | E-STOP sense contact B | RA8M2へE-STOP stateを通知し停止・緊急停止管理/システム状態管理の状態管理に使用 |
 
-二つのcontact状態が矛盾する場合は正常releaseと扱わず、走行禁止・hardware faultとして異常管理へ通知する。
+二つのcontact状態が矛盾する場合は正常releaseと扱わず、走行禁止・servo PWM禁止を維持し、hardware faultとして異常管理へ通知する。
 
-### 10.4 independent drive-stop path
+### 10.4 independent actuator-inhibit path
 
-contact Aは通常Process、BLE、I2C command、motor driver software protocolを経由せずdrive outputを無効化する。
+contact Aは通常Process、BLE、I2C command、motor driver software protocolまたはservo PWM software処理を経由せず、drive outputとservo PWM outputを禁止側へ作用させる。
+
+同じNC contact Aを独立したhardware gateへfan-outしてよく、servo用に第3のE-STOP contactを必須とはしない。ただし一方のgate故障が他方の安全側作用を妨げない回路構成とし、両作用点の状態を診断可能にする。
 
 preferred orderは次とする。
 
@@ -778,21 +785,23 @@ preferred orderは次とする。
 
 最終方式はDPC-XGL1-JP付属driver現物仕様で確定する。
 
+Servo側はcontact Aを`SERVO_PWM_OE`のhardware enable条件へ直接入れ、contact A open時は出力bufferをhigh-impedanceまたは安全な無信号状態へする。既に出力中のPWM pulseの正常下降端をsoftwareで待つことを、Body E-STOP hardware inhibitの成立条件にしない。
+
 ### 10.5 software経路との関係
 
 contact Bの変化はRA8M2へhardware interruptまたは高優先入力として通知する。
 
 softwareは停止・緊急停止管理に従ってdrive stop、servo PWM stop、緊急停止状態管理、永続保持および利用者通知を行う。
 
-hardware contact Aの成立はsoftware resultを待たない。
+hardware contact Aの成立はsoftware resultを待たず、`DRIVE_HW_ENABLE`と`SERVO_PWM_OE`へ先行して作用できる。software側はその後、同じE-STOP事象に対する局所状態失効、旧指令破棄、PWM予約失効、停止結果確認を継続する。
 
 ### 10.6 release
 
-E-STOP physical buttonをrelease位置へ戻しても`DRIVE_HW_ENABLE`を即時自動再許可しない。
+E-STOP physical buttonをrelease位置へ戻しても`DRIVE_HW_ENABLE`または`SERVO_PWM_OE`を即時自動再許可しない。
 
 走行については、停止・緊急停止管理の明示的な緊急停止解除が正常完了し、システム状態管理が走行を含む通常操作を許可し、走行制御の再初期化・走行利用可否その他の走行再開条件が成立した後、新たなsoftware drive enableによってのみ`DRIVE_HW_ENABLE`を再許可する。停止前の走行指令は再利用せず、走行指令の再開条件は走行制御の`driveEpoch`契約に従う。
 
-砲塔・砲身については、緊急停止解除後も砲塔・砲身制御の`OFF_UNREFERENCED`を維持し、砲塔・砲身制御が定める基準合わせおよび`MANUAL_DATUM_ARM`を完了するまでサーボPWMを再開しない。`MANUAL_DATUM_ARM`は砲塔・砲身のサーボ動作許可条件であり、`DRIVE_HW_ENABLE`の再許可条件には使用しない。
+砲塔・砲身については、physical E-STOP releaseだけでは`SERVO_PWM_OE`を再有効化しない。緊急停止解除後も砲塔・砲身制御の`OFF_UNREFERENCED`を維持し、砲塔・砲身制御が定める基準合わせおよび`MANUAL_DATUM_ARM`を完了し、新しいsoftware PWM enable requestを成立させるまでサーボPWMを再開しない。`MANUAL_DATUM_ARM`は砲塔・砲身のサーボ動作許可条件であり、`DRIVE_HW_ENABLE`の再許可条件には使用しない。
 
 ### 10.7 stop failure時の追加安全
 
@@ -1352,9 +1361,9 @@ BLE接続・認証、Wi-Fi接続および状態表示・利用者通知は、利
 | `PWR_DRIVE_PG/FLT` | eFuse／ロードスイッチ | 実際の電源状態を通知 | 電源・省電力管理、バッテリー・電気安全監視、走行制御へ提供 |
 | `PWR_SERVO_EN` | 電源・省電力管理 | サーボ電源のEnable制御 | 電源・省電力管理が目標電力状態を管理 |
 | `PWR_SERVO_PG/FLT` | 電源レギュレータ／保護回路 | 実際の電源状態を通知 | 電源・省電力管理、バッテリー・電気安全監視、砲塔・砲身制御へ提供 |
-| `HW_ESTOP_RELEASED` | E-STOP NCループ | 走行駆動を許可・禁止するハードウェアゲート | 停止・緊急停止管理が緊急停止状態を管理 |
+| `HW_ESTOP_RELEASED` | E-STOP NCループ | 走行駆動とservo PWMを許可・禁止する共通fail-safe hardware条件 | 停止・緊急停止管理が緊急停止状態を管理 |
 | `DRIVE_HW_ENABLE` | ハードウェアANDゲート | 走行駆動を独立して許可・禁止 | 走行制御側でも走行許可条件を満たす必要がある |
-| `SERVO_PWM_OE` | 砲塔・砲身制御＋ハードウェアインターロック | PWMバッファの出力許可・禁止 | 砲塔・砲身制御がPWM状態を管理 |
+| `SERVO_PWM_OE` | 砲塔・砲身制御＋E-STOP hardware gate＋ハードウェアインターロック | PWMバッファのeffective出力許可・禁止。effective gate状態または同等read-backを提供 | 砲塔・砲身制御がPWM状態を管理し、physical E-STOP releaseだけでは再許可しない |
 | `PROTECT_*` | 監視回路／eFuse／コンパレータ | 出力禁止または保護ラッチ | バッテリー・電気安全監視／異常管理が判定・復旧を管理 |
 | `PWR_BLE_EN` | 電源・省電力管理 | BLE電源系統を制御 | BLE接続・認証は利用要求、BLE内部状態、準備結果および完了結果を電源・省電力管理へ提供 |
 | `PWR_WIFI_EN` | 電源・省電力管理 | Wi-Fi電源系統を制御 | Wi-Fi接続は利用要求、Wi-Fi内部状態、準備結果および完了結果を電源・省電力管理へ提供 |
@@ -1813,7 +1822,7 @@ DPC-XGL1-JP driverにdedicated enableがない場合はPWR_DRIVE cutoffをindepe
 
 ### 26.6 砲塔・砲身制御
 
-servo PWM buffer OE、reset-safe default OFF、manual datum markをhardware側で提供する。
+servo PWM buffer OE、reset-safe default OFF、Body E-STOP contact Aによる独立hardware inhibit、effective OE read-back、manual datum markをhardware側で提供する。
 
 PWM off後のmechanical safety成立性はE-20で評価し、砲塔・砲身制御の安全前提へフィードバックする。
 
